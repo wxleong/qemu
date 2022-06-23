@@ -889,11 +889,9 @@ void hmp_info_tpm(Monitor *mon, const QDict *qdict)
             break;
         case TPM_TYPE_USB:
             tuo = ti->options->u.usb.data;
-            monitor_printf(mon, "%s%s%s%s",
-                           tuo->has_path ? ",path=" : "",
-                           tuo->has_path ? tuo->path : "",
-                           tuo->has_cancel_path ? ",cancel-path=" : "",
-                           tuo->has_cancel_path ? tuo->cancel_path : "");
+            monitor_printf(mon, "host=%s, port=%s",
+                           tuo->host,
+                           tuo->port);
             break;
         case TPM_TYPE__MAX:
             break;

@@ -21,6 +21,32 @@
  * You should have received a copy of the GNU Lesser General Public
  * License along with this library; if not, see <http://www.gnu.org/licenses/>
  */
+/*
+ * MIT License
+ *
+ * Copyright (c) 2022 Infineon Technologies AG
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE
+ */
+/*
+ * This file is taken from tpm_passthrough.c and modified accordingly.
+ */
 
 #include "qemu/osdep.h"
 #include "qemu-common.h"
@@ -34,6 +60,7 @@
 #include "qapi/qapi-visit-tpm.h"
 #include "trace.h"
 #include "qom/object.h"
+#include "io/channel-socket.h"
 
 #define TYPE_TPM_USB "tpm-usb"
 OBJECT_DECLARE_SIMPLE_TYPE(TPMUsbState, TPM_USB)
@@ -43,23 +70,18 @@ struct TPMUsbState {
     TPMBackend parent;
 
     TPMUsbOptions *options;
-    const char *tpm_dev;
-    int tpm_fd;
-    bool tpm_executing;
-    bool tpm_op_canceled;
-    int cancel_fd;
+    QIOChannel *data_ioc;
 
     TPMVersion tpm_version;
     size_t tpm_buffersize;
 };
 
 
-#define TPM_USB_DEFAULT_DEVICE "/dev/tpm0"
-
 /* functions */
 
 static void tpm_usb_cancel_cmd(TPMBackend *tb);
 
+#if 0
 static int tpm_usb_unix_read(int fd, uint8_t *buf, uint32_t len)
 {
     int ret;
@@ -73,66 +95,24 @@ static int tpm_usb_unix_read(int fd, uint8_t *buf, uint32_t len)
     }
     return ret;
 }
+#endif
 
-static void tpm_usb_unix_tx_bufs(TPMUsbState *tpm_pt,
+static void tpm_usb_unix_tx_bufs(TPMUsbState *tpm_usb,
                                  const uint8_t *in, uint32_t in_len,
                                  uint8_t *out, uint32_t out_len,
                                  bool *selftest_done, Error **errp)
 {
-    ssize_t ret;
-    bool is_selftest;
 
-    /* FIXME: protect shared variables or use other sync mechanism */
-    tpm_pt->tpm_op_canceled = false;
-    tpm_pt->tpm_executing = true;
-    *selftest_done = false;
-
-    is_selftest = tpm_util_is_selftest(in, in_len);
-
-    ret = qemu_write_full(tpm_pt->tpm_fd, in, in_len);
-    if (ret != in_len) {
-        if (!tpm_pt->tpm_op_canceled || errno != ECANCELED) {
-            error_setg_errno(errp, errno, "tpm_usb: error while "
-                             "transmitting data to TPM");
-        }
-        goto err_exit;
-    }
-
-    tpm_pt->tpm_executing = false;
-
-    ret = tpm_usb_unix_read(tpm_pt->tpm_fd, out, out_len);
-    if (ret < 0) {
-        if (!tpm_pt->tpm_op_canceled || errno != ECANCELED) {
-            error_setg_errno(errp, errno, "tpm_usb: error while "
-                             "reading data from TPM");
-        }
-    } else if (ret < sizeof(struct tpm_resp_hdr) ||
-               tpm_cmd_get_size(out) != ret) {
-        ret = -1;
-        error_setg_errno(errp, errno, "tpm_usb: received invalid "
-                     "response packet from TPM");
-    }
-
-    if (is_selftest && (ret >= sizeof(struct tpm_resp_hdr))) {
-        *selftest_done = tpm_cmd_get_errcode(out) == 0;
-    }
-
-err_exit:
-    if (ret < 0) {
-        tpm_util_write_fatal_error_response(out, out_len);
-    }
-
-    tpm_pt->tpm_executing = false;
 }
 
 static void tpm_usb_handle_request(TPMBackend *tb, TPMBackendCmd *cmd,
                                            Error **errp)
 {
-    TPMUsbState *tpm_pt = TPM_USB(tb);
+    TPMUsbState *tpm_usb = TPM_USB(tb);
 
     trace_tpm_usb_handle_request(cmd);
 
-    tpm_usb_unix_tx_bufs(tpm_pt, cmd->in, cmd->in_len,
+    tpm_usb_unix_tx_bufs(tpm_usb, cmd->in, cmd->in_len,
                                  cmd->out, cmd->out_len, &cmd->selftest_done,
                                  errp);
 }
@@ -158,137 +138,101 @@ static int tpm_usb_reset_tpm_established_flag(TPMBackend *tb,
 
 static void tpm_usb_cancel_cmd(TPMBackend *tb)
 {
-    TPMUsbState *tpm_pt = TPM_USB(tb);
-    int n;
-
-    /*
-     * As of Linux 3.7 the tpm_tis driver does not properly cancel
-     * commands on all TPM manufacturers' TPMs.
-     * Only cancel if we're busy so we don't cancel someone else's
-     * command, e.g., a command executed on the host.
-     */
-    if (tpm_pt->tpm_executing) {
-        if (tpm_pt->cancel_fd >= 0) {
-            tpm_pt->tpm_op_canceled = true;
-            n = write(tpm_pt->cancel_fd, "-", 1);
-            if (n != 1) {
-                error_report("Canceling TPM command failed: %s",
-                             strerror(errno));
-            }
-        } else {
-            error_report("Cannot cancel TPM command due to missing "
-                         "TPM sysfs cancel entry");
-        }
-    }
+    /* not supported */
 }
 
 static TPMVersion tpm_usb_get_tpm_version(TPMBackend *tb)
 {
-    TPMUsbState *tpm_pt = TPM_USB(tb);
+    TPMUsbState *tpm_usb = TPM_USB(tb);
 
-    return tpm_pt->tpm_version;
+    return tpm_usb->tpm_version;
 }
 
 static size_t tpm_usb_get_buffer_size(TPMBackend *tb)
 {
-    TPMUsbState *tpm_pt = TPM_USB(tb);
+    TPMUsbState *tpm_usb = TPM_USB(tb);
     int ret;
 
-    ret = tpm_util_get_buffer_size(tpm_pt->tpm_fd, tpm_pt->tpm_version,
-                                   &tpm_pt->tpm_buffersize);
+    ret = tpm_util_get_buffer_size(QIO_CHANNEL_SOCKET(tpm_usb->data_ioc)->fd,
+                                   tpm_usb->tpm_version,
+                                   &tpm_usb->tpm_buffersize);
     if (ret < 0) {
-        tpm_pt->tpm_buffersize = 4096;
+        tpm_usb->tpm_buffersize = 4096;
     }
-    return tpm_pt->tpm_buffersize;
-}
-
-/*
- * Unless path or file descriptor set has been provided by user,
- * determine the sysfs cancel file following kernel documentation
- * in Documentation/ABI/stable/sysfs-class-tpm.
- * From /dev/tpm0 create /sys/class/tpm/tpm0/device/cancel
- * before 4.0: /sys/class/misc/tpm0/device/cancel
- */
-static int tpm_usb_open_sysfs_cancel(TPMUsbState *tpm_pt)
-{
-    int fd = -1;
-    char *dev;
-    char path[PATH_MAX];
-
-    if (tpm_pt->options->cancel_path) {
-        fd = qemu_open_old(tpm_pt->options->cancel_path, O_WRONLY);
-        if (fd < 0) {
-            error_report("tpm_usb: Could not open TPM cancel path: %s",
-                         strerror(errno));
-        }
-        return fd;
-    }
-
-    dev = strrchr(tpm_pt->tpm_dev, '/');
-    if (!dev) {
-        error_report("tpm_usb: Bad TPM device path %s",
-                     tpm_pt->tpm_dev);
-        return -1;
-    }
-
-    dev++;
-    if (snprintf(path, sizeof(path), "/sys/class/tpm/%s/device/cancel",
-                 dev) < sizeof(path)) {
-        fd = qemu_open_old(path, O_WRONLY);
-        if (fd < 0) {
-            if (snprintf(path, sizeof(path), "/sys/class/misc/%s/device/cancel",
-                         dev) < sizeof(path)) {
-                fd = qemu_open_old(path, O_WRONLY);
-            }
-        }
-    }
-
-    if (fd < 0) {
-        error_report("tpm_usb: Could not guess TPM cancel path");
-    } else {
-        tpm_pt->options->cancel_path = g_strdup(path);
-    }
-
-    return fd;
+    return tpm_usb->tpm_buffersize;
 }
 
 static int
-tpm_usb_handle_device_opts(TPMUsbState *tpm_pt, QemuOpts *opts)
+connect_socket(const char *hostname, int port)
+{
+    int s;
+    struct hostent *host;
+    struct sockaddr_in addr;
+
+    if ((host = gethostbyname(hostname)) == NULL) {
+        return -1;
+    }
+
+    bzero(&addr, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(port);
+    addr.sin_addr.s_addr = *(long*)(host->h_addr);
+
+    s = qemu_socket(AF_INET, SOCK_STREAM, 0);
+    if (s < 0) {
+        return -1;
+    }
+
+    if (connect(s, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+        return -1;
+    }
+
+    return s;
+}
+
+static int
+tpm_usb_handle_device_opts(TPMUsbState *tpm_usb, QemuOpts *opts)
 {
     const char *value;
+    Error *err = NULL;
+    int fd;
 
-    value = qemu_opt_get(opts, "cancel-path");
+    value = qemu_opt_get(opts, "host");
     if (value) {
-        tpm_pt->options->cancel_path = g_strdup(value);
-        tpm_pt->options->has_cancel_path = true;
+        tpm_usb->options->host = g_strdup(value);
+        tpm_usb->options->has_host = true;
     }
 
-    value = qemu_opt_get(opts, "path");
+    value = qemu_opt_get(opts, "port");
     if (value) {
-        tpm_pt->options->has_path = true;
-        tpm_pt->options->path = g_strdup(value);
+        tpm_usb->options->port = g_strdup(value);
+        tpm_usb->options->has_port = true;
     }
 
-    tpm_pt->tpm_dev = value ? value : TPM_USB_DEFAULT_DEVICE;
-    tpm_pt->tpm_fd = qemu_open_old(tpm_pt->tpm_dev, O_RDWR);
-    if (tpm_pt->tpm_fd < 0) {
-        error_report("Cannot access TPM device using '%s': %s",
-                     tpm_pt->tpm_dev, strerror(errno));
-        return -1;
+    fd = connect_socket("localhost", 9883);
+    if (!fd) {
+        error_report("tpm-usb: Failed to create socket");
+        goto err_exit;
     }
 
-    if (tpm_util_test_tpmdev(tpm_pt->tpm_fd, &tpm_pt->tpm_version)) {
-        error_report("'%s' is not a TPM device.",
-                     tpm_pt->tpm_dev);
-        return -1;
+    tpm_usb->data_ioc = QIO_CHANNEL(qio_channel_socket_new_fd(fd, &err));
+    if (err) {
+        error_prepend(&err, "tpm-usb: Failed to create io channel: ");
+        error_report_err(err);
+        goto err_exit;
     }
 
-    tpm_pt->cancel_fd = tpm_usb_open_sysfs_cancel(tpm_pt);
-    if (tpm_pt->cancel_fd < 0) {
-        return -1;
+    if (tpm_util_test_tpmdev(QIO_CHANNEL_SOCKET(tpm_usb->data_ioc)->fd,
+                             &tpm_usb->tpm_version)) {
+        error_report("tpm-usb: Failed to reach TPM");
+        goto err_exit;
     }
 
     return 0;
+
+err_exit:
+    closesocket(fd);
+    return -1;
 }
 
 static TPMBackend *tpm_usb_create(QemuOpts *opts)
@@ -305,12 +249,12 @@ static TPMBackend *tpm_usb_create(QemuOpts *opts)
 
 static int tpm_usb_startup_tpm(TPMBackend *tb, size_t buffersize)
 {
-    TPMUsbState *tpm_pt = TPM_USB(tb);
+    TPMUsbState *tpm_usb = TPM_USB(tb);
 
-    if (buffersize && buffersize < tpm_pt->tpm_buffersize) {
+    if (buffersize && buffersize < tpm_usb->tpm_buffersize) {
         error_report("Requested buffer size of %zu is smaller than host TPM's "
                      "fixed buffer size of %zu",
-                     buffersize, tpm_pt->tpm_buffersize);
+                     buffersize, tpm_usb->tpm_buffersize);
         return -1;
     }
 
@@ -323,7 +267,7 @@ static TpmTypeOptions *tpm_usb_get_tpm_options(TPMBackend *tb)
 
     options->type = TPM_TYPE_USB;
     options->u.usb.data = QAPI_CLONE(TPMUsbOptions,
-                                             TPM_USB(tb)->options);
+                                     TPM_USB(tb)->options);
 
     return options;
 }
@@ -331,40 +275,39 @@ static TpmTypeOptions *tpm_usb_get_tpm_options(TPMBackend *tb)
 static const QemuOptDesc tpm_usb_cmdline_opts[] = {
     TPM_STANDARD_CMDLINE_OPTS,
     {
-        .name = "cancel-path",
+        .name = "host",
         .type = QEMU_OPT_STRING,
-        .help = "Sysfs file entry for canceling TPM commands",
+        .help = "Connecting to tpm2_server host",
     },
     {
-        .name = "path",
+        .name = "port",
         .type = QEMU_OPT_STRING,
-        .help = "Path to TPM device on the host",
+        .help = "Connecting to tpm2_server port",
     },
     { /* end of list */ },
 };
 
 static void tpm_usb_inst_init(Object *obj)
 {
-    TPMUsbState *tpm_pt = TPM_USB(obj);
+    TPMUsbState *tpm_usb = TPM_USB(obj);
 
-    tpm_pt->options = g_new0(TPMUsbOptions, 1);
-    tpm_pt->tpm_fd = -1;
-    tpm_pt->cancel_fd = -1;
+    tpm_usb->options = g_new0(TPMUsbOptions, 1);
 }
 
 static void tpm_usb_inst_finalize(Object *obj)
 {
-    TPMUsbState *tpm_pt = TPM_USB(obj);
+    TPMUsbState *tpm_usb = TPM_USB(obj);
+    int fd = QIO_CHANNEL_SOCKET(tpm_usb->data_ioc)->fd;
 
     tpm_usb_cancel_cmd(TPM_BACKEND(obj));
 
-    if (tpm_pt->tpm_fd >= 0) {
-        qemu_close(tpm_pt->tpm_fd);
+    if (fd >= 0) {
+        qemu_close(fd);
     }
-    if (tpm_pt->cancel_fd >= 0) {
-        qemu_close(tpm_pt->cancel_fd);
-    }
-    qapi_free_TPMUsbOptions(tpm_pt->options);
+
+    object_unref(OBJECT(tpm_usb->data_ioc));
+
+    qapi_free_TPMUsbOptions(tpm_usb->options);
 }
 
 static void tpm_usb_class_init(ObjectClass *klass, void *data)

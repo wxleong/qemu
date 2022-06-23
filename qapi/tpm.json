@@ -106,16 +106,15 @@
 #
 # Information about the TPM usb type
 #
-# @path: string describing the path used for accessing the TPM device
+# @host: string the host address to access TPM device
 #
-# @cancel-path: string showing the TPM's sysfs cancel file
-#               for cancellation of TPM commands while they are executing
+# @port: string the port number to access TPM device
 #
 # Since: 7.0
 ##
 { 'struct': 'TPMUsbOptions',
-  'data': { '*path': 'str',
-            '*cancel-path': 'str' },
+  'data': { '*host': 'str',
+            '*port': 'str' },
   'if': 'CONFIG_TPM' }
 
 ##
