@@ -853,6 +853,7 @@ void hmp_info_tpm(Monitor *mon, const QDict *qdict)
     unsigned int c = 0;
     TPMPassthroughOptions *tpo;
     TPMEmulatorOptions *teo;
+    TPMUsbOptions *tuo;
 
     info_list = qmp_query_tpm(&err);
     if (err) {
@@ -885,6 +886,14 @@ void hmp_info_tpm(Monitor *mon, const QDict *qdict)
         case TPM_TYPE_EMULATOR:
             teo = ti->options->u.emulator.data;
             monitor_printf(mon, ",chardev=%s", teo->chardev);
+            break;
+        case TPM_TYPE_USB:
+            tuo = ti->options->u.usb.data;
+            monitor_printf(mon, "%s%s%s%s",
+                           tuo->has_path ? ",path=" : "",
+                           tuo->has_path ? tuo->path : "",
+                           tuo->has_cancel_path ? ",cancel-path=" : "",
+                           tuo->has_cancel_path ? tuo->cancel_path : "");
             break;
         case TPM_TYPE__MAX:
             break;

@@ -46,10 +46,12 @@
 # @passthrough: TPM passthrough type
 # @emulator: Software Emulator TPM type
 #            Since: 2.11
+# @usb: TPM usb type
+#       Since: 7.0
 #
 # Since: 1.5
 ##
-{ 'enum': 'TpmType', 'data': [ 'passthrough', 'emulator' ],
+{ 'enum': 'TpmType', 'data': [ 'passthrough', 'emulator', 'usb' ],
   'if': 'CONFIG_TPM' }
 
 ##
@@ -100,6 +102,23 @@
   'if': 'CONFIG_TPM' }
 
 ##
+# @TPMUsbOptions:
+#
+# Information about the TPM usb type
+#
+# @path: string describing the path used for accessing the TPM device
+#
+# @cancel-path: string showing the TPM's sysfs cancel file
+#               for cancellation of TPM commands while they are executing
+#
+# Since: 7.0
+##
+{ 'struct': 'TPMUsbOptions',
+  'data': { '*path': 'str',
+            '*cancel-path': 'str' },
+  'if': 'CONFIG_TPM' }
+
+##
 # @TPMPassthroughOptionsWrapper:
 #
 # Since: 1.5
@@ -118,12 +137,22 @@
   'if': 'CONFIG_TPM' }
 
 ##
+# @TPMUsbOptionsWrapper:
+#
+# Since: 7.0
+##
+{ 'struct': 'TPMUsbOptionsWrapper',
+  'data': { 'data': 'TPMUsbOptions' },
+  'if': 'CONFIG_TPM' }
+
+##
 # @TpmTypeOptions:
 #
 # A union referencing different TPM backend types' configuration options
 #
 # @type: - 'passthrough' The configuration options for the TPM passthrough type
 #        - 'emulator' The configuration options for TPM emulator backend type
+#        - 'usb' The configuration options for TPM usb backend type
 #
 # Since: 1.5
 ##
@@ -131,7 +160,8 @@
   'base': { 'type': 'TpmType' },
   'discriminator': 'type',
   'data': { 'passthrough' : 'TPMPassthroughOptionsWrapper',
-            'emulator': 'TPMEmulatorOptionsWrapper' },
+            'emulator': 'TPMEmulatorOptionsWrapper',
+            'usb': 'TPMUsbOptionsWrapper' },
   'if': 'CONFIG_TPM' }
 
 ##

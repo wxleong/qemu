@@ -1,5 +1,9 @@
 # See docs/devel/tracing.rst for syntax documentation.
 
+# tpm_usb.c
+tpm_usb_handle_request(void *cmd) "processing command %p"
+tpm_usb_reset(void) "reset"
+
 # tpm_passthrough.c
 tpm_passthrough_handle_request(void *cmd) "processing command %p"
 tpm_passthrough_reset(void) "reset"

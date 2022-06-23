@@ -12,3 +12,8 @@ config TPM_EMULATOR
     bool
     default y
     depends on TPM_BACKEND
+
+config TPM_USB
+    bool
+    default y
+    depends on TPM_BACKEND && LINUX
